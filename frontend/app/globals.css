@@ -1,0 +1,31 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap');
+
+html, body {
+  background: #0a0a1a;
+  color: #e2e8f0;
+  font-family: 'Space Grotesk', system-ui, sans-serif;
+}
+
+.gradient-text {
+  background: linear-gradient(135deg, #00ff88, #00ccff, #a855f7);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.btn-primary {
+  @apply inline-flex items-center gap-2 px-6 py-3 rounded-lg font-semibold text-black transition-transform hover:-translate-y-0.5;
+  background: linear-gradient(135deg, #00ff88, #00ccff);
+}
+
+.btn-ghost {
+  @apply inline-flex items-center gap-2 px-6 py-3 rounded-lg font-semibold border border-[#2d3748] hover:bg-[#1a1a2e] transition-colors;
+}
+
+.card {
+  @apply bg-[#1a1a2e] border border-[#2d3748] rounded-xl p-6 transition-all hover:-translate-y-1 hover:border-[#00ff88];
+}

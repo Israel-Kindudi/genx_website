@@ -1,3 +1,6 @@
 # Ignore node_modules everywhere in the project
 node_modules/
 **/node_modules/
+frontend/.next/
+
+**/.next/
