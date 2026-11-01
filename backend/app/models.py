@@ -42,6 +42,8 @@ class User(Base):
 
     role            = Column(String, default="user")
     is_active       = Column(Boolean, default=True)
+    email_verified         = Column(Boolean, default=False)   # <-- ADD if missing
+    email_verified_at      = Column(DateTime, nullable=True) 
     plan_id         = Column(Integer, ForeignKey("plans.id"), nullable=True)
     last_login      = Column(DateTime, nullable=True)
     created_at      = Column(DateTime, default=datetime.utcnow)
@@ -176,3 +178,33 @@ class AuditLog(Base):
     action     = Column(String, index=True)
     detail     = Column(String, default="")
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    # ============================================================
+# Payment Intents (mobile money + card checkout)
+# ============================================================
+class PaymentIntent(Base):
+    __tablename__ = "payment_intents"
+
+    id            = Column(Integer, primary_key=True, index=True)
+    user_id       = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    plan_id       = Column(Integer, ForeignKey("plans.id"), nullable=False)
+
+    amount        = Column(Float, default=0.0)
+    currency      = Column(String, default="USD")
+    billing_cycle = Column(String, default="monthly")
+
+    status        = Column(String, default="pending", index=True)
+    # pending | requires_action | processing | succeeded | failed | canceled
+
+    provider      = Column(String, default="stub")
+    provider_ref  = Column(String, nullable=True)
+    idempotency_key = Column(String, unique=True, index=True)
+
+    meta_json     = Column(Text, default="{}")
+
+    created_at    = Column(DateTime, default=datetime.utcnow, index=True)
+    updated_at    = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    completed_at  = Column(DateTime, nullable=True)
+
+    user = relationship("User")
+    plan = relationship("Plan")

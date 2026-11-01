@@ -1,146 +1,64 @@
 # backend/app/routers/auth_router.py
 import os
-import smtplib
-from email.mime.text import MIMEText
+import json
 from datetime import datetime, timedelta
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+import resend
+from jose import jwt, JWTError
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from itsdangerous import URLSafeTimedSerializer, BadSignature
 
+from ..config import settings
 from ..database import get_db
-from ..models import User, Plan, Subscription
-from ..schemas import (
-    UserCreate, UserLogin, UserOut, UserUpdate,
-    UserAdminOut, UserAdminUpdate, UserActivityOut,
-    GoogleAuthIn, PlanOut, Token, InvoiceOut, SubscriptionOut,
+from ..models import (
+    User, Plan, Subscription, Invoice,
+    PaymentIntent, UsageEvent, AuditLog,
 )
-from ..auth import get_current_user, create_access_token, verify_password, hash_password, ACCESS_TOKEN_EXPIRE_MINUTES, require_admin,get_current_user, create_access_token, verify_password,hash_password, ACCESS_TOKEN_EXPIRE_MINUTES
+from ..schemas import (
+    UserCreate, UserOut, UserUpdate,
+    UserAdminOut, UserAdminUpdate, UserActivityOut,
+    PlanOut, Token, VerifyEmailIn, VerifyEmailOut,
+)
+from ..auth import (
+    get_current_user, create_access_token, verify_password,
+    hash_password, require_admin, ACCESS_TOKEN_EXPIRE_MINUTES,
+)
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
-# Setup verification serializer
+# ── Verification token serializer (for email links) ──
 SECRET = os.getenv("JWT_SECRET", "fallback-secret")
 serializer = URLSafeTimedSerializer(SECRET, salt="email-verify")
 
+resend.api_key = os.getenv("RESEND_API_KEY")
+
+
 def send_verification_email(email: str, token: str):
-    """Send email. If SMTP is not configured, print to console for testing."""
+    """Send verification email via Resend, or log to console if not configured."""
     verify_url = f"https://genx.vortech.markets/verify-email?token={token}"
-    
-    smtp_user = os.getenv("SMTP_USER")
-    smtp_pass = os.getenv("SMTP_PASS")
-    
-    if not smtp_user or not smtp_pass:
-        print(f"\n[EMAIL VERIFY] URL: {verify_url}\n")
+
+    if not resend.api_key:
+        print(f"\n[EMAIL VERIFY] URL: {verify_url}\n", flush=True)
         return
-        
-    msg = MIMEText(f"Welcome to GenX! Please verify your email by clicking here: {verify_url}")
-    msg["Subject"] = "Verify your GenX Account"
-    msg["From"] = smtp_user
-    msg["To"] = email
-    
+
     try:
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-            server.login(smtp_user, smtp_pass)
-            server.send_message(msg)
+        resend.Emails.send({
+            "from": os.getenv("RESEND_FROM_EMAIL", "GenX <noreply@genx.vortech.markets>"),
+            "to": email,
+            "subject": "Verify your GenX account",
+            "html": f"""
+                <h2>Welcome to GenX</h2>
+                <p>Click the link below to verify your email address:</p>
+                <p><a href="{verify_url}">Verify email</a></p>
+                <p>This link expires in 24 hours.</p>
+            """,
+        })
     except Exception as e:
-        print(f"Failed to send email: {e}")
-        print(f"[EMAIL VERIFY FALLBACK] URL: {verify_url}")
-
-# --- 1. Registration ---
-@router.post("/register", response_model=UserOut)
-def register(user_in: UserCreate, db: Session = Depends(get_db)):
-    # Check if user exists
-    if db.query(User).filter(User.email == user_in.email).first():
-        raise HTTPException(status_code=400, detail="Email already registered")
-
-    # Create user
-    user = User(
-        email=user_in.email,
-        hashed_password=hash_password(user_in.password) if user_in.password else None,
-        full_name=user_in.full_name,
-        phone_number=user_in.phone_number,
-        country=user_in.country,
-        is_verified=False, # Must verify
-        terms_accepted_at=datetime.utcnow() if user_in.terms_accepted else None,
-        terms_accepted_version=user_in.terms_version
-    )
-    db.add(user)
-    db.commit()
-    db.refresh(user)
-
-    # Send verify email
-    token = serializer.dumps({"email": user.email})
-    send_verification_email(user.email, token)
-    
-    return user
-
-# --- 2. Email Verification ---
-@router.get("/verify-email")
-def verify_email(token: str, db: Session = Depends(get_db)):
-    try:
-        data = serializer.loads(token, max_age=86400) # 24 hours
-    except BadSignature:
-        raise HTTPException(status_code=400, detail="Invalid or expired token")
-        
-    user = db.query(User).filter(User.email == data["email"]).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-        
-    user.is_verified = True
-    db.commit()
-    return {"message": "Email verified successfully"}
-
-# --- 3. Google Login ---
-@router.post("/google-login")
-def google_login(payload: GoogleAuthIn, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.email == payload.email).first()
-    
-    if not user:
-        # Create new user from Google
-        user = User(
-            email=payload.email,
-            full_name=payload.full_name,
-            auth_provider="google",
-            is_verified=True, # Google emails are pre-verified
-            hashed_password=None
-        )
-        db.add(user)
-        db.commit()
-        db.refresh(user)
-    
-    # Generate standard JWT
-    access_token = create_access_token(
-        data={"sub": user.email, "role": user.role},
-        expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    )
-    return {"access_token": access_token, "token_type": "bearer"}
-
-# --- 4. Login (Add is_verified check) ---
-@router.post("/token")
-def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.email == form_data.username).first()
-    
-    if not user or not user.hashed_password:
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-        
-    if not verify_password(form_data.password, user.hashed_password):
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-        
-    if not user.is_verified:
-        raise HTTPException(status_code=403, detail="Please verify your email before logging in")
-
-    # Update last login
-    user.last_login = datetime.utcnow()
-    db.commit()
-
-    access_token = create_access_token(
-        data={"sub": user.email, "role": user.role},
-        expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    )
-    return {"access_token": access_token, "token_type": "bearer"}
+        print(f"[EMAIL ERROR] {e}", flush=True)
+        print(f"[EMAIL VERIFY FALLBACK] URL: {verify_url}", flush=True)
 
 
 def _plan_out(p: Plan | None) -> PlanOut | None:
@@ -151,16 +69,16 @@ def _plan_out(p: Plan | None) -> PlanOut | None:
     return PlanOut(**{k: v for k, v in d.items() if k in PlanOut.model_fields})
 
 
-# ---------------------------------------------------------------------------
-# register / login / me
-# ---------------------------------------------------------------------------
+# ============================================================
+# PUBLIC: Register
+# ============================================================
 @router.post("/register", response_model=Token)
 def register(payload: UserCreate, db: Session = Depends(get_db)):
     """
-    Register a new user and immediately return a JWT token.
-    
-    Frontend contract: the client calls /register once, receives {access_token},
-    saves it, and redirects to /dashboard — no separate /token call needed.
+    Register a new user.
+    - Sends a verification email.
+    - Returns a JWT so the user is logged in immediately.
+    - Verification can be completed later by clicking the email link.
     """
     existing = db.query(User).filter(User.email == payload.email).first()
     if existing:
@@ -175,54 +93,125 @@ def register(payload: UserCreate, db: Session = Depends(get_db)):
         full_name=payload.full_name or "",
         role="admin" if is_first_user else "user",
         is_active=True,
+        email_verified=False,
         plan_id=trial_plan.id if trial_plan else None,
         terms_accepted_at=datetime.utcnow() if payload.terms_accepted else None,
         terms_accepted_version=payload.terms_version if payload.terms_accepted else None,
     )
     db.add(user)
-    db.flush()  # get user.id before audit log
+    db.flush()
 
-    # audit trail — the frontend doesn't see this, but admins can
+    # Send verification email with signed token
+    verify_token = serializer.dumps({"email": user.email})
+    send_verification_email(user.email, verify_token)
+
+    # Audit trail
     db.add(AuditLog(
         user_id=user.id,
         actor_id=user.id,
         action="user.register",
-        detail=f"role={'admin' if is_first_user else 'user'} terms={payload.terms_accepted} version={payload.terms_version}",
+        detail=f"role={'admin' if is_first_user else 'user'} terms={payload.terms_accepted}",
     ))
 
     db.commit()
     db.refresh(user)
 
-    # Issue token immediately (matches frontend expectation)
     token = create_access_token({"sub": user.email, "role": user.role})
     return Token(access_token=token, token_type="bearer")
 
+
+# ============================================================
+# PUBLIC: Verify Email
+# ============================================================
+@router.post("/verify-email", response_model=VerifyEmailOut)
+def verify_email_post(payload: VerifyEmailIn, db: Session = Depends(get_db)):
+    """Verify email via signed token (called from frontend POST)."""
+    try:
+        data = serializer.loads(payload.token, max_age=86400)  # 24h
+    except BadSignature:
+        raise HTTPException(400, "Invalid or expired token")
+
+    email = data.get("email")
+    if not email:
+        raise HTTPException(400, "Token missing email claim")
+
+    user = db.query(User).filter(User.email == email).first()
+    if not user:
+        raise HTTPException(404, "User not found")
+
+    if not user.email_verified:
+        user.email_verified = True
+        user.email_verified_at = datetime.utcnow()
+        db.add(AuditLog(
+            user_id=user.id,
+            actor_id=user.id,
+            action="user.email_verified",
+            detail=f"Verified {email}",
+        ))
+        db.commit()
+        db.refresh(user)
+
+    token = create_access_token({"sub": user.email, "role": user.role})
+    return VerifyEmailOut(access_token=token, message="Email verified successfully")
+
+
+@router.get("/verify-email")
+def verify_email_get(token: str, db: Session = Depends(get_db)):
+    """Verify email via GET (for direct email link clicks)."""
+    try:
+        data = serializer.loads(token, max_age=86400)
+    except BadSignature:
+        raise HTTPException(400, "Invalid or expired token")
+
+    user = db.query(User).filter(User.email == data["email"]).first()
+    if not user:
+        raise HTTPException(404, "User not found")
+
+    if not user.email_verified:
+        user.email_verified = True
+        user.email_verified_at = datetime.utcnow()
+        db.commit()
+
+    return {"message": "Email verified successfully"}
+
+
+# ============================================================
+# PUBLIC: Login
+# ============================================================
 @router.post("/token", response_model=Token)
 def login(
     form: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db),
 ):
     user = db.query(User).filter(User.email == form.username).first()
-    if not user or not verify_password(form.password, user.hashed_password):
+    if not user or not user.hashed_password:
+        raise HTTPException(401, "Invalid credentials")
+    if not verify_password(form.password, user.hashed_password):
         raise HTTPException(401, "Invalid credentials")
     if not user.is_active:
         raise HTTPException(403, "Account is disabled")
+
+    # NOTE: We do NOT block login on unverified email — the user gets a
+    # banner in the dashboard. Only block actions that require verification.
 
     user.last_login = datetime.utcnow()
     db.commit()
 
     token = create_access_token({"sub": user.email, "role": user.role})
-    return Token(access_token=token)
+    return Token(access_token=token, token_type="bearer")
 
 
+# ============================================================
+# AUTHENTICATED: Me
+# ============================================================
 @router.get("/me", response_model=UserOut)
 def me(user: User = Depends(get_current_user)):
     return user
 
 
-# ---------------------------------------------------------------------------
-# admin — user management
-# ---------------------------------------------------------------------------
+# ============================================================
+# ADMIN: User management
+# ============================================================
 @router.get("/users", response_model=List[UserAdminOut])
 def list_users(_: User = Depends(require_admin), db: Session = Depends(get_db)):
     users = db.query(User).order_by(User.id.asc()).all()
@@ -274,6 +263,11 @@ def update_user(
         changes.append(f"plan→{plan.code}")
         u.plan_id = plan.id
 
+    if payload.force_verify:
+        u.email_verified = True
+        u.email_verified_at = datetime.utcnow()
+        changes.append("force_verify=True")
+
     if changes:
         db.add(AuditLog(
             user_id=u.id,
@@ -307,11 +301,19 @@ def delete_user(
         raise HTTPException(404, "User not found")
     if u.id == admin.id:
         raise HTTPException(400, "Cannot delete yourself")
+
+    db.query(Subscription).filter(Subscription.user_id == u.id).delete()
+    db.query(Invoice).filter(Invoice.user_id == u.id).delete()
+    db.query(PaymentIntent).filter(PaymentIntent.user_id == u.id).delete()
+    db.query(UsageEvent).filter(UsageEvent.user_id == u.id).delete()
+    db.query(AuditLog).filter(AuditLog.user_id == u.id).delete()
+
+    email = u.email
     db.delete(u)
     db.add(AuditLog(
         actor_id=admin.id,
         action="user.delete",
-        detail=f"Deleted {u.email}",
+        detail=f"Hard deleted user {email}",
     ))
     db.commit()
     return {"ok": True}

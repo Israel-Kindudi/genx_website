@@ -1,24 +1,9 @@
 import "./globals.css";
 import type { Metadata } from "next";
-import { JetBrains_Mono, Space_Grotesk } from "next/font/google";
 import Header from "@/components/Header";
 import PublicSiteFooter from "@/components/PublicSiteFooter";
 import ScrollReveal from "@/components/ScrollReveal";
 import BackToTop from "@/components/BackToTop";
-
-const spaceGrotesk = Space_Grotesk({
-  subsets: ["latin"],
-  weight: ["300", "400", "500", "600", "700"],
-  display: "swap",
-  variable: "--font-space-grotesk",
-});
-
-const jetBrainsMono = JetBrains_Mono({
-  subsets: ["latin"],
-  weight: ["400", "500", "600", "700"],
-  display: "swap",
-  variable: "--font-jetbrains-mono",
-});
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://genx.vortech.markets/"),
@@ -78,9 +63,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body
-        className={`${spaceGrotesk.variable} ${jetBrainsMono.variable} bg-[#0B0F17] text-slate-100 antialiased`}
-      >
+      <body className="font-sans bg-[#0B0F17] text-slate-100 antialiased">
         <script
           type="application/ld+json"
           dangerouslySetInnerHTML={{

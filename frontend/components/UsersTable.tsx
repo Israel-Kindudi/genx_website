@@ -23,7 +23,9 @@ export default function UsersTable({ users, loading, onSelect, selectedId }: Pro
       if (roleFilter !== "all" && u.role !== roleFilter) return false;
       if (statusFilter === "active" && !u.is_active) return false;
       if (statusFilter === "suspended" && u.is_active) return false;
-      if (planFilter !== "all" && (u.plan?.code ?? "free") !== planFilter) return false;
+      
+      // Fix: use the correct plan codes
+      if (planFilter !== "all" && (u.plan?.code ?? "trial") !== planFilter) return false;
       return true;
     });
   }, [users, q, roleFilter, statusFilter, planFilter]);
@@ -50,9 +52,11 @@ export default function UsersTable({ users, loading, onSelect, selectedId }: Pro
         <select value={planFilter} onChange={(e) => setPlanFilter(e.target.value)}
           className="rounded-lg border border-slate-700 bg-[#0B0F17] px-3 py-2 text-sm text-slate-200">
           <option value="all">All plans</option>
-          <option value="free">Free</option>
+          <option value="trial">Trial</option>
+          <option value="starter">Starter</option>
           <option value="pro">Pro</option>
-          <option value="elite">Elite</option>
+          <option value="firm">Firm</option>
+          <option value="firm_xl">Firm XL</option>
         </select>
         <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}
           className="rounded-lg border border-slate-700 bg-[#0B0F17] px-3 py-2 text-sm text-slate-200">

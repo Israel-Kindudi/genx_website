@@ -9,7 +9,12 @@ class Settings(BaseSettings):
     jwt_expires_minutes: int = 1440
     database_url: str = "sqlite:///./genx.db"
     allowed_origins: str = "http://localhost:3000"
-
+    resend_api_key: str = ""
+    resend_from_email: str = "GenX <noreply@genx.vortech.markets>"
+    stripe_secret_key: str = ""
+    stripe_webhook_secret: str = ""
+    flutterwave_secret_key: str = ""
+    flutterwave_webhook_hash: str = ""
     @property
     def allowed_origins_list(self) -> List[str]:
         return [o.strip() for o in self.allowed_origins.split(",")]

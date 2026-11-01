@@ -78,6 +78,7 @@ class UserOut(BaseModel):
     auth_provider: str = "local"
     role: str = "user"
     is_active: bool = True
+    email_verified: bool = False 
     last_login: Optional[datetime] = None
     created_at: Optional[datetime] = None
     terms_accepted_at: Optional[datetime] = None
@@ -85,7 +86,13 @@ class UserOut(BaseModel):
     plan: Optional[PlanOut] = None
     class Config:
         from_attributes = True
+class VerifyEmailIn(BaseModel):
+    token: str
 
+class VerifyEmailOut(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    message: str = "Email verified"
 class UserUpdate(BaseModel):
     role: Optional[str] = None
     is_active: Optional[bool] = None
@@ -153,7 +160,8 @@ class UserAdminUpdate(BaseModel):
     is_active: Optional[bool] = None
     plan_code: Optional[str] = None
     full_name: Optional[str] = None
-
+    force_verify: Optional[bool] = None  # <-- NEW
+    
 class UserActivityOut(BaseModel):
     id: int
     action: str

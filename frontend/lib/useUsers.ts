@@ -24,7 +24,11 @@ export function useUsers() {
 }
 
 export async function updateUser(id: number, patch: Partial<{
-  role: string; is_active: boolean; plan_code: string; full_name: string;
+  role: string; 
+  is_active: boolean; 
+  plan_code: string; 
+  full_name: string;
+  force_verify: boolean;  // <-- Add this line
 }>) {
   const r = await api.patch(`/api/auth/users/${id}`, patch);
   return r.data as AdminUser;
