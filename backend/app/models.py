@@ -208,3 +208,15 @@ class PaymentIntent(Base):
 
     user = relationship("User")
     plan = relationship("Plan")
+
+# ---------- Client Bridges (Seam 3: bridge -> user mapping) ----------
+class ClientBridge(Base):
+    __tablename__ = "client_bridges"
+
+    id         = Column(Integer, primary_key=True, index=True)
+    bridge_id  = Column(String, unique=True, index=True, nullable=False)
+    token      = Column(String, nullable=False)
+    user_id    = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    label      = Column(String, default="")
+    created_at = Column(DateTime, default=datetime.utcnow)
+    last_seen  = Column(DateTime, nullable=True)
