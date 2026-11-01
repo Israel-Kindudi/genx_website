@@ -42,3 +42,9 @@ Thumbs.db
 
 # Backups
 backups/
+# backend/.gitignore additions (or repo-root .gitignore):
+client_results/
+live_results/
+backend/C:/
+*.pyc
+__pycache__/

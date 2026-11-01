@@ -1,9 +1,11 @@
+from pathlib import Path                      # NEW (add at top)
+
 from pydantic_settings import BaseSettings
 from typing import List
 
 
 class Settings(BaseSettings):
-    genx_root: str = "."
+    genx_root: str = str(Path(__file__).resolve().parents[1])   # CHANGED (was ".")
     jwt_secret: str = "change-me"
     jwt_algorithm: str = "HS256"
     jwt_expires_minutes: int = 1440
