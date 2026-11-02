@@ -93,8 +93,8 @@ app.include_router(bridge_router.router)   # /api/bridge/*
 def _load_client_snapshots():
     """Read currently-known client telemetry snapshots from disk.
 
-    Returns a list of {"bridge_id", "data", "timestamp"} dicts, one per
-    performance.json under backend/client_results/*/.
+    Returns a list of {"bridge_id", "user_id", "data", "timestamp"} dicts,
+    one per performance.json under backend/client_results/*/.
     """
     out = []
     if not CLIENT_RESULTS_ROOT.exists():
@@ -196,9 +196,9 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
 
         # snapshot-on-connect
         # - authenticated: send ONLY this user's bridges' snapshots
-        # - anonymous: keep the single-bridge guard (no fan-out)
-        snapshots = _load_client_snapshots()
+        # - anonymous: no client data at all (Seam 3); master events only
         if user_id is not None:
+            snapshots = _load_client_snapshots()
             mine = [s for s in snapshots if s.get("user_id") == user_id]
             for s in mine:
                 await websocket.send_text(json.dumps({
@@ -209,20 +209,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                 }, default=str))
             logger.info(f"[ws] snapshot-on-connect user_id={user_id} count={len(mine)}")
         else:
-            if len(snapshots) == 1:
-                s = snapshots[0]
-                await websocket.send_text(json.dumps({
-                    "type": "client_equity",
-                    "bridge_id": s["bridge_id"],
-                    "data": s["data"],
-                    "timestamp": s["timestamp"],
-                }, default=str))
-                logger.info(f"[ws] snapshot-on-connect (anon) {s['bridge_id']}")
-            elif len(snapshots) > 1:
-                logger.warning(
-                    f"[ws] {len(snapshots)} bridges present; anonymous "
-                    f"snapshot-on-connect disabled (no fan-out)"
-                )
+            logger.info("[ws] snapshot-on-connect (anon): no client data by design")
 
         while True:
             try:

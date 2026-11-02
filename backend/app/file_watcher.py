@@ -6,7 +6,8 @@ telemetry snapshots) and broadcast updates.
 - client_results/{bridge_id}/performance.json -> client_equity (private to owner)
 
 Seam 3: client_equity is routed by the user_id written into the snapshot by
-/api/bridge/sync, so the watcher needs no DB access.
+/api/bridge/sync, so the watcher needs no DB access. Snapshots with no owner
+(pre-Seam-3 artifacts) are NOT broadcast — client telemetry never fans out.
 """
 import json
 import asyncio
@@ -128,6 +129,14 @@ class LiveResultsWatcher:
                         continue
                     bridge_id = snapshot.get("bridge_id") or path.parent.name
                     owner_id = snapshot.get("user_id")
+                    if owner_id is None:
+                        # Orphaned/legacy snapshot (pre-Seam-3). Client telemetry
+                        # must never fan out to anonymous sockets. Not broadcast.
+                        logger.warning(
+                            f"[watcher] client_equity {bridge_id} has no owner_id; "
+                            f"not broadcast (orphaned snapshot)"
+                        )
+                        continue
                     logger.info(f"[watcher] client_equity {bridge_id} -> user_id={owner_id}")
                     await manager.broadcast({
                         "type": "client_equity",
