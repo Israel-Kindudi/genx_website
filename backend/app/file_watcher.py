@@ -2,10 +2,11 @@
 Watch live_results/ (master event streams) and client_results/ (client
 telemetry snapshots) and broadcast updates.
 
-Anchored to this file's location (parents[1] = backend/), NOT settings.genx_root.
+- live_results/session_*/events.jsonl         -> master events (public)
+- client_results/{bridge_id}/performance.json -> client_equity (private to owner)
 
-- live_results/session_*/events.jsonl         -> master events (unchanged)
-- client_results/{bridge_id}/performance.json -> client_equity snapshots (new)
+Seam 3: client_equity is routed by the user_id written into the snapshot by
+/api/bridge/sync, so the watcher needs no DB access.
 """
 import json
 import asyncio
@@ -33,7 +34,7 @@ class LiveResultsWatcher:
         self._offsets = {}
         self._client_mtimes = {}
 
-    # -------- master stream (unchanged behavior) --------
+    # -------- master stream (public, unchanged) --------
 
     def _find_event_files(self):
         if not MASTER_ROOT.exists():
@@ -73,7 +74,7 @@ class LiveResultsWatcher:
                 return part
         return "unknown"
 
-    # -------- client telemetry (new) --------
+    # -------- client telemetry (private) --------
 
     def _find_client_files(self):
         if not CLIENT_ROOT.exists():
@@ -96,8 +97,6 @@ class LiveResultsWatcher:
         self._client_mtimes[key] = mtime
         return data
 
-    # -------- loop --------
-
     async def _loop(self):
         logger.info(f"[watcher] Starting watcher (interval={self.interval}s)")
         while self.running:
@@ -115,6 +114,7 @@ class LiveResultsWatcher:
                             if "account_currency" not in data and "currency" in data:
                                 data["account_currency"] = data["currency"]
                         if event_type in ("trade_open", "trade_close", "equity", "capital_flow"):
+                            # master events stay public
                             await manager.broadcast({
                                 "type": event_type,
                                 "session_id": session_id,
@@ -127,13 +127,14 @@ class LiveResultsWatcher:
                     if snapshot is None:
                         continue
                     bridge_id = snapshot.get("bridge_id") or path.parent.name
-                    logger.info(f"[watcher] client_equity {bridge_id}")
+                    owner_id = snapshot.get("user_id")
+                    logger.info(f"[watcher] client_equity {bridge_id} -> user_id={owner_id}")
                     await manager.broadcast({
                         "type": "client_equity",
                         "bridge_id": bridge_id,
                         "data": snapshot,
                         "timestamp": snapshot.get("updated_at"),
-                    })
+                    }, to_user_id=owner_id)
 
             except Exception as e:
                 logger.error(f"[watcher] Error: {e}")

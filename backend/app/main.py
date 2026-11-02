@@ -7,8 +7,9 @@ import json
 import logging
 import asyncio
 from pathlib import Path
+from typing import Optional
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
@@ -93,8 +94,7 @@ def _load_client_snapshots():
     """Read currently-known client telemetry snapshots from disk.
 
     Returns a list of {"bridge_id", "data", "timestamp"} dicts, one per
-    performance.json under backend/client_results/*/. Sorted by bridge_id
-    for determinism.
+    performance.json under backend/client_results/*/.
     """
     out = []
     if not CLIENT_RESULTS_ROOT.exists():
@@ -107,10 +107,32 @@ def _load_client_snapshots():
             continue
         out.append({
             "bridge_id": data.get("bridge_id") or path.parent.name,
+            "user_id": data.get("user_id"),
             "data": data,
             "timestamp": data.get("updated_at"),
         })
     return out
+
+
+def _resolve_user_id_from_token(token: str) -> Optional[int]:
+    """Decode a JWT to a users.id, or None. Does not raise to the caller."""
+    try:
+        from .auth import decode_token
+        from .models import User
+
+        payload = decode_token(token)
+        email = payload.get("sub")
+        if not email:
+            return None
+        db = SessionLocal()
+        try:
+            user = db.query(User).filter(User.email == email).first()
+            return user.id if user else None
+        finally:
+            db.close()
+    except Exception as e:
+        logger.warning(f"[ws] token decode failed: {e}")
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -156,38 +178,54 @@ def health():
 # WebSocket — /ws/live
 # ---------------------------------------------------------------------------
 @app.websocket("/ws/live")
-async def websocket_endpoint(websocket: WebSocket):
-    await manager.connect(websocket)
+async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(None)):
+    user_id = _resolve_user_id_from_token(token) if token else None
+    if token and user_id is None:
+        # A token was supplied and rejected: close, don't silently downgrade.
+        await websocket.close(code=1008)
+        logger.warning("[ws] rejected connection: invalid token")
+        return
+
+    await manager.connect(websocket, user_id=user_id)
     try:
         await websocket.send_json({
             "type": "hello",
             "message": "Connected to GenX live stream",
+            "authenticated": user_id is not None,
         })
 
-        # snapshot-on-connect: send currently-known client telemetry to this
-        # socket so a fresh dashboard is not blank until the next /sync.
-        # GUARD: only when exactly one bridge exists. With >1 we would fan
-        # out every client's equity to every socket — a privacy leak. Until
-        # per-user auth exists (Seam 3), refuse and log.
+        # snapshot-on-connect
+        # - authenticated: send ONLY this user's bridges' snapshots
+        # - anonymous: keep the single-bridge guard (no fan-out)
         snapshots = _load_client_snapshots()
-        if len(snapshots) == 1:
-            s = snapshots[0]
-            await websocket.send_text(json.dumps({
-                "type": "client_equity",
-                "bridge_id": s["bridge_id"],
-                "data": s["data"],
-                "timestamp": s["timestamp"],
-            }, default=str))
-            logger.info(f"[ws] snapshot-on-connect {s['bridge_id']}")
-        elif len(snapshots) > 1:
-            logger.warning(
-                f"[ws] {len(snapshots)} bridges present; snapshot-on-connect "
-                f"disabled pending Seam 3 auth (no fan-out)"
-            )
+        if user_id is not None:
+            mine = [s for s in snapshots if s.get("user_id") == user_id]
+            for s in mine:
+                await websocket.send_text(json.dumps({
+                    "type": "client_equity",
+                    "bridge_id": s["bridge_id"],
+                    "data": s["data"],
+                    "timestamp": s["timestamp"],
+                }, default=str))
+            logger.info(f"[ws] snapshot-on-connect user_id={user_id} count={len(mine)}")
+        else:
+            if len(snapshots) == 1:
+                s = snapshots[0]
+                await websocket.send_text(json.dumps({
+                    "type": "client_equity",
+                    "bridge_id": s["bridge_id"],
+                    "data": s["data"],
+                    "timestamp": s["timestamp"],
+                }, default=str))
+                logger.info(f"[ws] snapshot-on-connect (anon) {s['bridge_id']}")
+            elif len(snapshots) > 1:
+                logger.warning(
+                    f"[ws] {len(snapshots)} bridges present; anonymous "
+                    f"snapshot-on-connect disabled (no fan-out)"
+                )
 
         while True:
             try:
-                # Consume client messages; sends heartbeat on idle
                 await asyncio.wait_for(websocket.receive_text(), timeout=30)
             except asyncio.TimeoutError:
                 await websocket.send_json({"type": "heartbeat"})
